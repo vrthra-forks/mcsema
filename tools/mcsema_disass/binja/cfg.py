@@ -385,7 +385,7 @@ def recover_inst(bv, func, pb_block, pb_inst, il, all_il, is_last):
   refs = set()
   for il_exp in all_il:
     refs.update(xrefs.get_xrefs(bv, func, il_exp))
-  
+
   debug_refs = []
 
   # Add all discovered xrefs to pb_inst
@@ -402,7 +402,7 @@ def recover_inst(bv, func, pb_block, pb_inst, il, all_il, is_last):
 
   table = jmptable.get_jmptable(bv, il)
   if table is not None:
-    debug_refs.append(add_xref(bv, pb_inst, table.base_addr, 0, CFG_pb2.CodeReference.MemoryDisplacementOperand))
+    #debug_refs.append(add_xref(bv, pb_inst, table.base_addr, 0, CFG_pb2.CodeReference.MemoryDisplacementOperand))
     JMP_TABLES.append(table)
 
     # Add any missing successors

@@ -36,6 +36,8 @@ class XRef(object):
     CONTROLFLOW  : CFG_pb2.CodeReference.ControlFlowOperand
   }
 
+  __slots__ = ('addr', 'type', 'mask')
+
   def __init__(self, addr, reftype, mask=0):
     self.addr = addr
     self.type = reftype
@@ -48,20 +50,19 @@ class XRef(object):
   def __repr__(self):
     return '<XREF: 0x{:x} {}>'.format(self.addr, CFG_pb2.CodeReference.OperandType.Name(self.cfg_type))
 
+  def __hash__(self):
+    return hash((self.addr, self.mask, self.type))
+
   def __eq__(self, other):
     if not isinstance(other, XRef):
-      return NotImplemented
+      return False
     return self.addr == other.addr and \
-         self.type == other.type
-
-  def __hash__(self):
-    return hash((self.addr, self.type))
+           self.mask == other.mask and \
+           self.type == other.type
 
 _NO_XREFS = set()
 
-_IGNORED_XREF_OP_TYPES = (LowLevelILOperation.LLIL_JUMP,
-                          LowLevelILOperation.LLIL_JUMP_TO,
-                          LowLevelILOperation.LLIL_UNIMPL,
+_IGNORED_XREF_OP_TYPES = (LowLevelILOperation.LLIL_UNIMPL,
                           LowLevelILOperation.LLIL_UNIMPL_MEM)
 
 
@@ -99,8 +100,8 @@ def _get_aarch64_partial_xref(bv, func, il, dis):
   if value.type not in _CONST_OR_CONST_PTR_TYPES:
     return None
 
-  _AARCH64_ADRP_XREFS[il.address] = XRef(value.value, XRef.DISPLACEMENT, mask=-4096L)
-  _AARCH64_ADRP_XREFS[next_address] = XRef(value.value, XRef.IMMEDIATE, mask=4095)
+  _AARCH64_ADRP_XREFS[il.address] = XRef(value.value, XRef.DISPLACEMENT, mask=0x0fffff000)
+  _AARCH64_ADRP_XREFS[next_address] = XRef(value.value, XRef.IMMEDIATE, mask=0xfff)
 
   return _AARCH64_ADRP_XREFS[il.address]
 
