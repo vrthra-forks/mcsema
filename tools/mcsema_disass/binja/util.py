@@ -158,7 +158,13 @@ def is_code(bv, addr):
   # Binja will classify a section as ReadOnlyCode or ReadOnlyData, though
   # both sections are still in an executable segment
   sec = get_section_at(bv, addr)
-  return sec is not None and sec.semantics == SectionSemantics.ReadOnlyCodeSectionSemantics
+  return sec is not None and (
+         sec.semantics == SectionSemantics.ReadOnlyCodeSectionSemantics or
+
+         # NOTE: binja doesn't classify plt as code with the above method, so
+         # it's included manually
+         sec.name == '.plt'
+  )
 
 
 def is_executable(bv, addr):

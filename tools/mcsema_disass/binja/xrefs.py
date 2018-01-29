@@ -15,6 +15,7 @@
 import binaryninja as binja
 from binaryninja.enums import LowLevelILOperation
 import logging
+import re
 
 import CFG_pb2
 import util
@@ -209,6 +210,7 @@ def _fill_xrefs_internal(bv, il, refs, reftype=XRef.IMMEDIATE, parent=None):
     for oper in il.operands:
       if oper != mem_il:
         _fill_xrefs_internal(bv, oper, refs)
+    return  # all operands have been handled
 
   elif op in _CONST_XREF_OP_TYPES:
     # Hit a value, if this is a reference we can save the xref
@@ -218,7 +220,7 @@ def _fill_xrefs_internal(bv, il, refs, reftype=XRef.IMMEDIATE, parent=None):
         # There's some other expression including this value
         # look at the disassembly to figure out if this is actually a displacement
         dis = bv.get_disassembly(il.address)
-        if '[' in dis and ']' in dis:
+        if re.search(r'\[.*{:x}.*\]'.format(il.constant), dis):
           # Fix the reftype depending on how this value is used
           if parent.operation == LowLevelILOperation.LLIL_SET_REG:
             reftype = XRef.MEMORY

@@ -147,7 +147,7 @@ def recover_externals(bv, pb_mod):
     if sym.type == SymbolType.ImportedFunctionSymbol:
       recover_ext_func(bv, pb_mod, sym)
 
-    if sym.type == SymbolType.ImportedDataSymbol:
+    if sym.type in [SymbolType.ImportedDataSymbol, SymbolType.DataSymbol]:
       recover_ext_var(bv, pb_mod, sym)
   DEBUG_POP()
 
@@ -330,13 +330,16 @@ def add_xref(bv, pb_inst, target, mask, optype):
     xref.mask = mask
     debug_mask = " & {:x}".format(mask)
 
-  sym_name = util.find_symbol_name(bv, target)
-  if len(sym_name) > 0:
-    xref.name = sym_name
-
   if util.is_code(bv, target):
     xref.target_type = CFG_pb2.CodeReference.CodeTarget
     debug_type = "code"
+
+    # Some plt entries are missed by auto-analysis, so symbols are missing
+    # Define a function if this is the case, binja will be able to resolve the symbol
+    # for this address based on the GOT entry it references
+    if util.get_section_at(bv, target).name == '.plt' and bv.get_function_at(target) is None:
+      bv.add_function(target)
+      bv.update_analysis_and_wait()
   else:
     xref.target_type = CFG_pb2.CodeReference.DataTarget
     debug_type = "data"
@@ -347,6 +350,10 @@ def add_xref(bv, pb_inst, target, mask, optype):
   else:
     xref.location = CFG_pb2.CodeReference.Internal
     debug_loc = "internal"
+
+  sym_name = util.find_symbol_name(bv, target)
+  if len(sym_name) > 0:
+    xref.name = sym_name
 
   # If the target happens to be a function, queue it for recovery
   if bv.get_function_at(target) is not None:
@@ -481,6 +488,9 @@ def recover_function(bv, pb_mod, addr, is_entry=False):
   pb_func.is_entrypoint = is_entry
   pb_func.name = func.symbol.name
 
+  # Preprocess the blocks in this functions to fix tail calls
+  fix_tail_call_targets(bv, func)
+
   # Recover all basic blocks
   il_groups = util.collect_il_groups(func.lifted_il)
   var_refs = defaultdict(list)
@@ -537,7 +547,7 @@ def recover_cfg(bv, args):
     recover_function(bv, pb_mod, addr)
 
   log.debug('Recovering Globals')
-  vars.recover_globals(bv, pb_mod)
+  # vars.recover_globals(bv, pb_mod)
 
   log.debug('Processing Segments')
   recover_sections(bv, pb_mod)
