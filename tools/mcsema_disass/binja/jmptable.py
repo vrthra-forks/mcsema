@@ -22,6 +22,8 @@ from debug import *
 
 log = logging.getLogger(util.LOGNAME)
 
+FIXED_JUMP_TABLES = {}
+
 
 class JMPTable(object):
   """ Simple container for jump table info """
@@ -101,6 +103,8 @@ def get_jmptable(bv, il):
   tgt_table = func.get_low_level_il_at(il.address).dest.possible_values
   if tgt_table.type == RegisterValueType.LookupTableValue:
     successors.extend(tgt_table.mapping.values())
+  elif il.address in FIXED_JUMP_TABLES:
+    successors.extend(FIXED_JUMP_TABLES[il.address])
 
   # Should be able to find table info now
   tbl = None
@@ -136,9 +140,39 @@ def get_jmptable(bv, il):
   else:
     # Parse out the base address
     base = util.search_displ_base(il.dest)
-    if base is not None:
+    if base is not None and util.is_valid_addr(bv, base):
       tbl = JMPTable(bv, base, successors)
 
   if tbl is not None:
-    DEBUG("Found jump table at {:x} with offset {:x}".format(tbl.base_addr, tbl.rel_off))
+    DEBUG("Found jump table at {:x} with offset {:x} and {} entries".format(tbl.base_addr, tbl.rel_off, len(tbl.targets)))
   return tbl
+
+
+def fix_missing_jump_tables(bv, func):
+  """ Attempts to recover any missed jump tables in a function
+
+  Args:
+    bv (binja.BinaryView)
+    func (binja.Function)
+  """
+  for blk in func.lifted_il:
+    for il in blk:
+      # We're only interested in LLIL_JUMP
+      if il.operation != LowLevelILOperation.LLIL_JUMP:
+        continue
+
+      # Skip anything that isn't loading from memory (i.e. constant, register)
+      if il.dest.operation != LowLevelILOperation.LLIL_LOAD:
+        continue
+
+      # Try to recover a jump table here
+      base = util.search_displ_base(il.dest)
+      if base is not None and util.is_valid_addr(bv, base):
+        # Find all jump targets in the table
+        branches = util.read_addr_table(bv, base, il.address)
+
+        # Add all discovered entries as branch targets
+        log.debug('Found %d missing jump table entries at %x', len(branches), il.address)
+        FIXED_JUMP_TABLES[il.address] = branches
+        func.set_user_indirect_branches(il.address, [(func.arch, br) for br in branches])
+        bv.update_analysis_and_wait()

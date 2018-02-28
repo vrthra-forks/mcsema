@@ -74,6 +74,13 @@ def read_qword(bv, addr):
   return struct.unpack(fmt, padded_data)[0]
 
 
+def read_addr(bv, addr):
+  # type: (binja.BinaryView, int) -> int
+  # Read a value of the current address size
+  reader = {4: read_dword, 8:read_qword}[bv.address_size]
+  return reader(bv, addr)
+
+
 def load_binary(path):
   magic_type = magic.from_file(path)
   if 'ELF' in magic_type:
@@ -345,3 +352,65 @@ def collect_il_groups(il_func):
     for il in blk:
       il_map[il.address].append(il)
   return il_map
+
+
+def is_thunk(func):
+  """ Check if the given function appears to be a thunk
+  A thunk in this case is defined as a function with a single instruction matching:
+  JUMP -> LOAD -> [constant value]
+
+  Args:
+    func (binja.Function)
+
+  Returns:
+    bool
+  """
+  llil = func.low_level_il
+  il = llil[0]
+  return len(llil) == 1 and \
+         il.operation == LowLevelILOperation.LLIL_JUMP and \
+         il.dest.operation == LowLevelILOperation.LLIL_LOAD and \
+         il.dest.src.operation in [LowLevelILOperation.LLIL_CONST,
+                                   LowLevelILOperation.LLIL_CONST_PTR]
+
+
+def read_addr_table(bv, base, refaddr):
+  """ Attempts to read a table of addresses in the binary
+
+  This will continue to read addresses until either:
+  - An invalid address is read
+  - Code refs are found to a point in the table, none of which are `refaddr`
+
+  Args:
+    bv (binja.BinaryView)
+    base (int): Address of the start of the table
+    refaddr (int): Address of the instruction referencing the table
+                   This is used to determine when to stop reading
+
+  Returns:
+    list: All addresses recovered from the table
+  """
+  addrs = []
+  while True:
+    # Attempt to read a table entry
+    tbl_entry = read_addr(bv, base)
+    if len(addrs) > 0 and tbl_entry == 0:
+      # There's sometimes null padding between entries, just ignore it
+      base += bv.address_size
+      continue
+
+    if not is_valid_addr(bv, tbl_entry):
+      # Stop as soon as we hit an invalid address
+      break
+
+    # Check if any code references the address we're looking at now
+    # Assume a referring address other than `refaddr` means the table ended
+    crefs = [ref.address for ref in bv.get_code_refs(base)]
+    if len(crefs) > 0 and refaddr not in crefs:
+      # This is likely the start of another table, we can stop here
+      break
+
+    # If we have a valid entry, add it and continue
+    addrs.append(tbl_entry)
+    base += bv.address_size
+  return addrs

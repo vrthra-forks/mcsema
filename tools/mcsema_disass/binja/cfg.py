@@ -164,15 +164,13 @@ def recover_section_cross_references(bv, pb_seg, real_sect, sect_start, sect_end
     sect_end (int)
   """
   entry_width = util.clamp(real_sect.align, 4, bv.address_size)
-  read_val = {4: util.read_dword,
-              8: util.read_qword}[entry_width]
 
   DEBUG("Recovering references in [{:x}, {:x}) of section {}".format(
       sect_start, sect_end, real_sect.name))
 
   DEBUG_PUSH()
   for addr in xrange(sect_start, sect_end, entry_width):
-    xref = read_val(bv, addr)
+    xref = util.read_addr(bv, addr)
 
     if not util.is_valid_addr(bv, xref):
       continue
@@ -399,6 +397,35 @@ def recover_inst(bv, func, pb_block, pb_inst, il, all_il, is_last):
   for ref in refs:
     debug_refs.append(add_xref(bv, pb_inst, ref.addr, ref.mask, ref.cfg_type))
 
+    # Check if there might be a table of function pointers being referenced
+    if ref.type == xrefs.XRef.DISPLACEMENT and il.operation == LowLevelILOperation.LLIL_SET_REG:
+      base = util.search_displ_base(il)
+      if base is not None:
+        # Try reading a table here
+        table = util.read_addr_table(bv, base, il.address)
+
+        # Check if all the addresses are code
+        if len(table) > 0 and all(util.is_code(bv, addr) for addr in table):
+          log.debug('Found table of %d function pointers %x => %x: %s', len(table), il.address, base, map(hex, table))
+
+          # Define and queue up all the new functions
+          for addr in table:
+            bv.add_function(addr)
+            queue_func(addr)
+          bv.update_analysis_and_wait()
+
+    # Check if calling a static function pointer
+    if ref.type == xrefs.XRef.MEMORY and il.operation == LowLevelILOperation.LLIL_CALL:
+      mem_addr = il.dest.src.constant
+      func_addr = util.read_addr(bv, mem_addr)
+
+      if util.is_code(bv, func_addr):
+        # Define and queue the function
+        log.debug('Function pointer call: %x => %x', mem_addr, func_addr)
+        bv.add_function(func_addr)
+        queue_func(func_addr)
+        bv.update_analysis_and_wait()
+
   if is_local_noreturn(bv, il):
     pb_inst.local_noreturn = True
 
@@ -498,7 +525,8 @@ def recover_function(bv, pb_mod, addr, is_entry=False):
   pb_func.is_entrypoint = is_entry
   pb_func.name = func.symbol.name
 
-  # Preprocess the blocks in this functions to fix tail calls
+  # Preprocess the function to fix tail calls and jump tables
+  jmptable.fix_missing_jump_tables(bv, func)
   fix_tail_call_targets(bv, func)
 
   # Recover all basic blocks
