@@ -452,7 +452,17 @@ def fix_tail_call_targets(bv, func):
     bv (binja.BinaryView)
     func (binja.Function)
   """
+  func_section = util.get_section_at(bv, func.symbol.address).name
   for block in func.basic_blocks:
+    if util.get_section_at(bv, block.start).name != func_section:
+      log.debug('Block %x was inlined, defining a new function here', block.start)
+
+      # Define a function here and reanalyze
+      # All blocks contained in this new function will not be picked up
+      # in the remainder of this loop after analysis
+      bv.add_function(block.start)
+      bv.update_analysis_and_wait()
+
     # This will return a list of all basic blocks starting at the same address
     # The same block appearing in different functions (after inlining)
     # will appear as multiple `BasicBlock`s
@@ -460,7 +470,7 @@ def fix_tail_call_targets(bv, func):
 
     # There should only be a single block found
     if len(all_blocks) > 1:
-      log.debug('Block 0x%x exists in multiple functions, defining a new function here', block.start)
+      log.debug('Block %x exists in multiple functions, defining a new function here', block.start)
 
       # Define a function here and reanalyze
       # All blocks contained in this new function will not be picked up
@@ -481,7 +491,7 @@ def recover_function(bv, pb_mod, addr, is_entry=False):
     return
 
   # Initialize the protobuf for this function
-  DEBUG("Recovering function {} at {:x}".format(func.symbol.name, addr))
+  log.debug("Recovering function {} at {:x}".format(func.symbol.name, addr))
 
   pb_func = pb_mod.funcs.add()
   pb_func.ea = addr
@@ -546,7 +556,8 @@ def recover_cfg(bv, args):
 
     recover_function(bv, pb_mod, addr)
 
-  log.debug('Recovering Globals')
+  # log.debug('Recovering Globals')
+  # TODO(krx): get this working again
   # vars.recover_globals(bv, pb_mod)
 
   log.debug('Processing Segments')
@@ -561,7 +572,7 @@ def recover_cfg(bv, args):
 def parse_defs_file(bv, path):
   log.debug('Parsing %s', path)
   with open(path) as f:
-    for line in f.readlines():
+    for line in f:
       # Skip comments/empty lines
       if len(line.strip()) == 0 or line[0] == '#':
         continue
