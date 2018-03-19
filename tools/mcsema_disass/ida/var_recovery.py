@@ -16,7 +16,7 @@ try:
   from elftools.dwarf.descriptions import describe_attr_value, describe_reg_name
   from elftools.dwarf.locationlists import LocationEntry
   from elftools.common.py3compat import maxint, bytes2str, byte2int, int2byte
-  from elftools.dwarf.callframe import  instruction_name, CIE, FDE, ZERO
+  from elftools.dwarf.callframe import  instruction_name, CIE, FDE
 except ImportError:
   print "Install pyelf tools"
 

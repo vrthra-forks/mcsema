@@ -561,7 +561,7 @@ def recover_function(bv, pb_mod, addr, is_entry=False):
     vars.recover_stack_vars(pb_func, func, var_refs)
 
 
-def recover_cfg(bv, args):
+def recover_cfg(bv, args, extra_args):
   pb_mod = CFG_pb2.Module()
   pb_mod.name = os.path.basename(bv.file.filename)
 
@@ -584,9 +584,8 @@ def recover_cfg(bv, args):
 
     recover_function(bv, pb_mod, addr)
 
-  # log.debug('Recovering Globals')
-  # TODO(krx): get this working again
-  # vars.recover_globals(bv, pb_mod)
+  log.debug('Recovering Globals')
+  vars.recover_globals(bv, pb_mod, extra_args.recover_global_vars)
 
   log.debug('Processing Segments')
   recover_sections(bv, pb_mod)
@@ -636,6 +635,12 @@ def get_cfg(args, fixed_args):
       default=False,
       action='store_true')
 
+  parser.add_argument(
+      '--recover-global-vars',
+      type=argparse.FileType('r'),
+      default=None,
+      help='File containing the global variables to be lifted')
+
   extra_args = parser.parse_args(fixed_args)
 
   if extra_args.recover_stack_vars:
@@ -669,7 +674,7 @@ def get_cfg(args, fixed_args):
 
   # Recover module
   log.debug('Starting analysis')
-  pb_mod = recover_cfg(bv, args)
+  pb_mod = recover_cfg(bv, args, extra_args)
 
   # Save cfg
   log.debug('Saving to file: %s', args.output)

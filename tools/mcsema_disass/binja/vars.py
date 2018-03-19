@@ -18,59 +18,26 @@ from binaryninja.enums import (
   LowLevelILOperation
 )
 
+import CFG_pb2
 import logging
 import util
 from debug import *
 
 log = logging.getLogger(util.LOGNAME)
 
-SYM_IGNORE = [
-  '__data_start',
-  '__dso_handle',
-  '__init_array_start',
-  '__init_array_end',
-  '__TMC_END__',
-  '__JCR_END__',
-  '__elf_header',
-  '_DYNAMIC'
-]
 
+def recover_globals(bv, pb_mod, gvars_file):
+  if gvars_file is None:
+    return
 
-def recover_globals(bv, pb_mod):
-  # Sort symbols by address so we can estimate size if needed
-  # TODO(krx): I'd prefer to find a better way to identify globals
-  # than going through and filtering all variable symbols in certain sections
-  syms = sorted(bv.symbols.values(), key=lambda s: s.address)
-  for i, sym in enumerate(syms):
-    if sym.name in SYM_IGNORE:
-      continue
-
-    # Binja picks up a couple of symbols outside of names sections
-    sect = util.get_section_at(bv, sym.address)
-    if sect is None:
-      continue
-
-    if sym.type == SymbolType.DataSymbol and \
-       not util.is_executable(bv, sym.address) and \
-       not util.is_section_external(bv, sect):
-      log.debug('Recovering global %s @ 0x%x', sym.name, sym.address)
-      pb_gvar = pb_mod.global_vars.add()
-      pb_gvar.ea = sym.address
-      pb_gvar.name = sym.name
-
-      # Look at the variable type to determine size
-      data_var = bv.get_data_var_at(sym.address)
-      if data_var.type.type_class == TypeClass.VoidTypeClass:
-        # Estimate size based on the address of the next symbol
-        if sym is not syms[-1]:
-          pb_gvar.size = syms[i + 1].address - sym.address
-        else:
-          # Edge case for the last symbol
-          # Take end of the section as the "next symbol" instead
-          sec = util.get_section_at(bv, sym.address)
-          pb_gvar.size = sec.end - sym.address
-      else:
-        pb_gvar.size = data_var.type.width
+  log.debug('Recovering globals from %s', gvars_file)
+  GM = CFG_pb2.Module()
+  GM.ParseFromString(gvars_file.read())
+  for gvar in GM.global_vars:
+    pb_gvar = pb_mod.global_vars.add()
+    pb_gvar.ea = gvar.ea
+    pb_gvar.name = gvar.name
+    pb_gvar.size = gvar.size
 
 
 def recover_stack_vars(pb_func, func, var_refs):
