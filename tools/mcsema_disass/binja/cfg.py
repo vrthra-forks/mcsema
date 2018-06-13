@@ -59,6 +59,11 @@ RECOVER_OPTS = {
   'stack_vars': False
 }
 
+# TODO(krx): This symbol is hardcoded as weak until binja has a way of identifying weak symbols
+WEAK_SYMS = [
+  '__gmon_start__'
+]
+
 def queue_func(addr):
   if addr not in RECOVERED:
     TO_RECOVER.put(addr)
@@ -94,7 +99,7 @@ def recover_ext_func(bv, pb_mod, sym):
     pb_extfn.cc = cconv
     pb_extfn.has_return = func_has_return_type(func)
     pb_extfn.no_return = ret == 'Y'
-    pb_extfn.is_weak = False  # TODO: figure out how to decide this
+    pb_extfn.is_weak = sym.name in WEAK_SYMS  # TODO: figure out how to decide this
 
   else:
     WARN("External function is not part of defs file")
@@ -303,7 +308,8 @@ def is_local_noreturn(bv, il):
     # If a target address was recovered, check if it's in a noreturn function
     if tgt_addr is not None:
       tgt_func = util.get_func_containing(bv, tgt_addr)
-      return not tgt_func.function_type.can_return
+      if tgt_func is not None:
+        return not tgt_func.function_type.can_return
 
   # Other instructions that terminate control flow
   return il.operation in [LowLevelILOperation.LLIL_TRAP,
@@ -570,9 +576,14 @@ def recover_cfg(bv, args, extra_args):
     log.fatal('Entrypoint not found: %s', args.entrypoint)
   entry_addr = bv.symbols[args.entrypoint].address
 
+  # Queue autodiscovered functions
+  for func in bv.functions:
+      queue_func(func.start)
+
   # Recover the entrypoint func separately
   log.debug('Recovering CFG')
   recover_function(bv, pb_mod, entry_addr, is_entry=True)
+  RECOVERED.add(entry_addr)
 
   # Recover any discovered functions until there are none left
   while not TO_RECOVER.empty():
