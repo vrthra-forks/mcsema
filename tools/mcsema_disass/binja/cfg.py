@@ -29,6 +29,7 @@ import util
 import xrefs
 import jmptable
 import vars
+import exception
 from debug import *
 
 log = logging.getLogger(util.LOGNAME)
@@ -56,7 +57,8 @@ RECOVERED = set()
 TO_RECOVER = Queue()
 
 RECOVER_OPTS = {
-  'stack_vars': False
+  'stack_vars': False,
+  'exception': False
 }
 
 # TODO(krx): This symbol is hardcoded as weak until binja has a way of identifying weak symbols
@@ -199,6 +201,10 @@ def recover_section_cross_references(bv, pb_seg, real_sect, sect_start, sect_end
     else:
       pb_ref.target_fixup_kind = CFG_pb2.DataReference.Absolute
 
+    if not util.is_code(bv, addr) and util.is_func(bv, xref):
+      DEBUG('Queueing referenced function at {:x}'.format(xref))
+      queue_func(xref)
+
   DEBUG_POP()
 
 
@@ -279,22 +285,20 @@ def is_local_noreturn(bv, il):
   Returns:
     bool
   """
+  if il.operation == LowLevelILOperation.LLIL_GOTO:
+    return True
+
   if il.operation in [LowLevelILOperation.LLIL_CALL,
-            LowLevelILOperation.LLIL_JUMP,
-            LowLevelILOperation.LLIL_GOTO]:
+                      LowLevelILOperation.LLIL_JUMP]:
     # Resolve the destination address
     tgt_addr = None
     dst = il.dest
 
-    # GOTOs have an il index as the arg
-    if isinstance(dst, int):
-      tgt_addr = il.function[dst].address
-
     # Others will have an expression as the argument
-    elif isinstance(dst, binja.LowLevelILInstruction):
+    if isinstance(dst, binja.LowLevelILInstruction):
       # Immediate address
       if dst.operation in [LowLevelILOperation.LLIL_CONST,
-                 LowLevelILOperation.LLIL_CONST_PTR]:
+                           LowLevelILOperation.LLIL_CONST_PTR]:
         tgt_addr = dst.constant
 
       # Register
@@ -305,15 +309,16 @@ def is_local_noreturn(bv, il):
         if reg_val.type == RegisterValueType.ConstantValue:
           tgt_addr = reg_val.value
 
-    # If a target address was recovered, check if it's in a noreturn function
+    # If a target address was recovered, check if it's in a noreturn function,
+    # or if it's the current function
     if tgt_addr is not None:
       tgt_func = util.get_func_containing(bv, tgt_addr)
       if tgt_func is not None:
-        return not tgt_func.function_type.can_return
+        return tgt_func == util.get_func_containing(bv, il.address) or not tgt_func.function_type.can_return
 
   # Other instructions that terminate control flow
   return il.operation in [LowLevelILOperation.LLIL_TRAP,
-              LowLevelILOperation.LLIL_BP]
+                          LowLevelILOperation.LLIL_BP]
 
 
 _CFG_INST_XREF_TYPE_TO_NAME = {
@@ -325,6 +330,10 @@ _CFG_INST_XREF_TYPE_TO_NAME = {
 
 
 def add_xref(bv, pb_inst, target, mask, optype):
+  # Validate the target address
+  if util.get_section_at(bv, target) is None:
+    return 'None'
+
   xref = pb_inst.xrefs.add()
   xref.ea = target
   xref.operand_type = optype
@@ -394,8 +403,15 @@ def recover_inst(bv, func, pb_block, pb_inst, il, all_il, is_last):
 
   # Search all il instructions at the current address for xrefs
   refs = set()
+  has_control_flow = False
   for il_exp in all_il:
-    refs.update(xrefs.get_xrefs(bv, func, il_exp))
+    for ref in xrefs.get_xrefs(bv, func, il_exp):
+      # Don't allow more than one controlflow xref
+      if ref.type == ref.CONTROLFLOW:
+        if has_control_flow:
+          continue
+        has_control_flow = True
+      refs.add(ref)
 
   debug_refs = []
 
@@ -531,54 +547,121 @@ def recover_function(bv, pb_mod, addr, is_entry=False):
   pb_func.is_entrypoint = is_entry
   pb_func.name = func.symbol.name
 
-  # Preprocess the function to fix tail calls and jump tables
-  jmptable.fix_missing_jump_tables(bv, func)
-  fix_tail_call_targets(bv, func)
+  # Fill in eh_frame entries if loaded
+  if RECOVER_OPTS['exception']:
+    exception.recover_exception_entries(bv, pb_func, func.start)
 
-  # Recover all basic blocks
-  il_groups = util.collect_il_groups(func.lifted_il)
-  var_refs = defaultdict(list)
-  for block in func:
-    DEBUG_PUSH()
-    pb_block = add_block(pb_func, block)
-    DEBUG_PUSH()
-    
-    # Recover every instruction in the block
-    insts = list(block.disassembly_text)
-    for inst in insts:
-      # Skip over anything that isn't an instruction
-      if inst.tokens[0].type != InstructionTextTokenType.InstructionToken:
+  # More blocks (i.e. landing pads) may need to be included as part of this recovered function
+  # but binja doesn't support adding arbitrary blocks to a function
+  # This will queue up the functions to lift and include everything in the same protobuf func
+  func_queue = [func]
+  done_funcs = set()
+
+  while len(func_queue) != 0:
+    cur_func = func_queue.pop(0)
+    if cur_func.start in done_funcs:
         continue
-      il = func.get_lifted_il_at(inst.address)
-      all_il = il_groups[inst.address]
+    done_funcs.add(cur_func.start)
 
-      pb_inst = pb_block.instructions.add()
-      recover_inst(bv, func, pb_block, pb_inst, il, all_il, is_last=inst==insts[-1])
+    # Preprocess the function to fix tail calls and jump tables
+    jmptable.fix_missing_jump_tables(bv, cur_func)
+    fix_tail_call_targets(bv, cur_func)
 
-      # Find any references to stack vars in this instruction
-      if RECOVER_OPTS['stack_vars']:
-        vars.find_stack_var_refs(bv, inst, il, var_refs)
+    # Recover all basic blocks
+    il_groups = util.collect_il_groups(cur_func.lifted_il)
+    var_refs = defaultdict(list)
 
-    DEBUG_POP()
-    DEBUG_POP()
+    func_blocks = cur_func.basic_blocks
+    while len(func_blocks) > 0:
+      block = func_blocks.pop(0)
 
-  # Recover stack variables
-  if RECOVER_OPTS['stack_vars']:
-    vars.recover_stack_vars(pb_func, func, var_refs)
+      DEBUG_PUSH()
+      pb_block = add_block(pb_func, block)
+      DEBUG_PUSH()
+
+      # Recover every instruction in the block
+      insts = [i for i in block.disassembly_text if i.tokens[0].type == InstructionTextTokenType.InstructionToken]
+      for inst in insts:
+        il = cur_func.get_lifted_il_at(inst.address)
+        all_il = il_groups[inst.address]
+
+        if RECOVER_OPTS['exception']:
+          lp_ea = exception.get_exception_landingpad(pb_func, il.address)
+          if exception.is_lp_end(pb_func, il.address) or (lp_ea != 0 and is_local_noreturn(bv, il)):
+            # Split the block here
+            log.debug('Splitting block at landing pad end @ %x', il.address)
+            for ea in pb_block.successor_eas:
+              pb_block.successor_eas.remove(ea)
+            pb_block.successor_eas.append(il.address)
+
+            pb_block = add_block(pb_func, block)
+            pb_block.ea = il.address
+
+        # Recover instruction
+        pb_inst = pb_block.instructions.add()
+        is_last = (inst is insts[-1])
+        recover_inst(bv, cur_func, pb_block, pb_inst, il, all_il, is_last=is_last)
+
+        # There might be a missed "tail call" (fall through to another function)
+        if is_last and \
+           len(all_il) > 1 and \
+           all_il[-1].operation == LowLevelILOperation.LLIL_JUMP:
+          # Mark this next block as a successor
+          next_blk = all_il[-1].dest.constant
+          pb_block.successor_eas.append(next_blk)
+          log.debug('Missed fall through successor %x -> %x', il.address, next_blk)
+
+          # Make sure to recover the function that was called
+          queue_func(next_blk)
+
+        # Get landing pad address if available
+        if RECOVER_OPTS['exception']:
+          pb_inst.lp_ea = exception.get_exception_landingpad(pb_func, il.address)
+
+          lp = pb_inst.lp_ea
+          if util.is_valid_addr(bv, lp):
+            log.debug('Landing pad at %x from %x', lp, il.address)
+
+            # Create a function at the landing pad if it doesn't already exist
+            if bv.get_function_at(lp) is None:
+              log.debug('Creating function for landing pad at %x', lp)
+              bv.create_user_function(lp)
+              bv.update_analysis_and_wait()
+
+            func_queue.extend(bv.get_functions_containing(lp))
+
+        # Find any references to stack vars in this instruction
+        if RECOVER_OPTS['stack_vars']:
+          vars.find_stack_var_refs(bv, inst, il, var_refs)
+
+      DEBUG_POP()
+      DEBUG_POP()
+
+    # Recover stack variables
+    if RECOVER_OPTS['stack_vars']:
+      vars.recover_stack_vars(pb_func, cur_func, var_refs)
 
 
 def recover_cfg(bv, args, extra_args):
   pb_mod = CFG_pb2.Module()
   pb_mod.name = os.path.basename(bv.file.filename)
 
+  log.debug('Recovering Globals')
+  vars.recover_globals(bv, pb_mod, extra_args.recover_global_vars)
+
+  log.debug('Processing Segments')
+  recover_sections(bv, pb_mod)
+
+  queue_func(bv.entry_point)
+
   # Find the chosen entrypoint in the binary
   if args.entrypoint not in bv.symbols:
     log.fatal('Entrypoint not found: %s', args.entrypoint)
   entry_addr = bv.symbols[args.entrypoint].address
 
-  # Queue autodiscovered functions
-  for func in bv.functions:
-      queue_func(func.start)
+  # Recover exception table info
+  if RECOVER_OPTS['exception']:
+    exception.recover_exception_table(bv)
 
   # Recover the entrypoint func separately
   log.debug('Recovering CFG')
@@ -594,12 +677,6 @@ def recover_cfg(bv, args, extra_args):
     RECOVERED.add(addr)
 
     recover_function(bv, pb_mod, addr)
-
-  log.debug('Recovering Globals')
-  vars.recover_globals(bv, pb_mod, extra_args.recover_global_vars)
-
-  log.debug('Processing Segments')
-  recover_sections(bv, pb_mod)
 
   log.debug('Recovering Externals')
   recover_externals(bv, pb_mod)
@@ -647,6 +724,12 @@ def get_cfg(args, fixed_args):
       action='store_true')
 
   parser.add_argument(
+      '--recover-exception',
+      help='Flag to enable exception handler recovery',
+      default=False,
+      action='store_true')
+
+  parser.add_argument(
       '--recover-global-vars',
       type=argparse.FileType('r'),
       default=None,
@@ -656,6 +739,9 @@ def get_cfg(args, fixed_args):
 
   if extra_args.recover_stack_vars:
     RECOVER_OPTS['stack_vars'] = True
+
+  if extra_args.recover_exception:
+    RECOVER_OPTS['exception'] = True
 
   # Setup logger
   util.init_logger(args.log_file)

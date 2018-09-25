@@ -54,6 +54,21 @@ ENDIAN_TO_STRUCT = {
 }
 
 
+def read_byte(bv, addr):
+  # type: (binja.BinaryView, int) -> int
+  return ord(bv.read(addr, 1))
+
+
+def read_word(bv, addr):
+  # type: (binja.BinaryView, int) -> int
+  # Pad the data if fewer than 4 bytes are read
+  endianness = ENDIAN_TO_STRUCT[bv.endianness]
+  data = bv.read(addr, 2)
+  padded_data = '{{:\x00{}2s}}'.format(endianness).format(data)
+  fmt = '{}H'.format(endianness)
+  return struct.unpack(fmt, padded_data)[0]
+
+
 def read_dword(bv, addr):
   # type: (binja.BinaryView, int) -> int
   # Pad the data if fewer than 4 bytes are read
@@ -77,8 +92,35 @@ def read_qword(bv, addr):
 def read_addr(bv, addr):
   # type: (binja.BinaryView, int) -> int
   # Read a value of the current address size
-  reader = {4: read_dword, 8:read_qword}[bv.address_size]
+  reader = {4: read_dword, 8: read_qword}[bv.address_size]
   return reader(bv, addr)
+
+
+def read_leb128(bv, ea, signed):
+  """ Read LEB128 encoded data
+
+  Args:
+    bv (binja.BinaryView)
+    ea (int)
+    signed (bool)
+  """
+  val = 0
+  shift = 0
+  while True:
+    byte = read_byte(bv, ea)
+    val |= (byte & 0x7F) << shift
+    shift += 7
+    ea += 1
+    if (byte & 0x80) == 0:
+      break
+
+    if shift > 64:
+      log.warn("Bad leb128 encoding at %x", ea - shift/7)
+      return None
+
+  if signed and (byte & 0x40):
+    val -= (1 << shift)
+  return val, ea
 
 
 def load_binary(path):
@@ -124,6 +166,11 @@ def find_symbol_name(bv, addr):
   if sym is not None:
     return sym.name
   return ''
+
+
+def is_func(bv, addr):
+  # type: (binja.BinaryView, int) -> bool
+  return bv.get_function_at(addr) is not None
 
 
 def get_func_containing(bv, addr):

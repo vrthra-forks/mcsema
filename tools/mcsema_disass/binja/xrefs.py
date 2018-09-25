@@ -66,8 +66,8 @@ _NO_XREFS = set()
 _IGNORED_XREF_OP_TYPES = (LowLevelILOperation.LLIL_UNIMPL,
                           LowLevelILOperation.LLIL_UNIMPL_MEM)
 
-
-_CONST_XREF_OP_TYPES = [LowLevelILOperation.LLIL_CONST_PTR]
+_CONST_XREF_OP_TYPES = [LowLevelILOperation.LLIL_CONST_PTR,
+                        LowLevelILOperation.LLIL_CONST]
 
 _LOAD_STORE_OP_TYPES = (LowLevelILOperation.LLIL_LOAD,
                         LowLevelILOperation.LLIL_STORE)
@@ -186,6 +186,11 @@ def _fill_xrefs_internal(bv, il, refs, reftype=XRef.IMMEDIATE, parent=None):
   # Some instruction types are ignored
   if op in _IGNORED_XREF_OP_TYPES:
     return _NO_XREFS
+
+  # Special case for local control flow xrefs
+  elif op == LowLevelILOperation.LLIL_GOTO:
+    refs.add(XRef(il.function[il.dest].address, XRef.CONTROLFLOW))
+    return
 
   elif op == LowLevelILOperation.LLIL_CALL:
     # Any xref in here will be a control flow target
