@@ -76,6 +76,29 @@ message CodeReference {
   optional  string      name = 6;
 }
 
+message Action {
+  // Insert before the semantic of instruction or after
+  enum TimeType {
+    Post = 0;
+    Pre = 1;
+  }
+
+  // Available actions that mcsema-lift supports
+  enum ActionType {
+    SaveReg = 0;
+    RestoreReg = 1;
+    SaveMemory = 2;
+    RestoreMemory = 3;
+  }
+
+  required TimeType   time_type = 1;
+  required ActionType action_type = 2;
+
+  // SRC, DEST
+  // Names of operands, in case name is not known in the scope behviour is undefined
+  repeated string     operands = 3;
+}
+
 // An instruction inside of a block.
 message Instruction {
   required  int64           ea = 1;
@@ -85,6 +108,7 @@ message Instruction {
 
   // Address of the landing pad
   optional  uint64          lp_ea = 5;
+  optional  Action          actions = 6;
 }
 
 // A basic block of instructions inside of a function.
@@ -104,6 +128,9 @@ message Function {
   optional  string      name = 4;
   repeated  StackVariable      stack_vars = 5;
   repeated  ExceptionFrame     eh_frame = 6;
+
+  // Name of registers that this function saves in prologue
+  repeated  string  prologue_saved_regs = 7;
 }
 
 /* A function that is used or referenced within binary, but not implemented
