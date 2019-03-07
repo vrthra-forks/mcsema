@@ -77,12 +77,6 @@ message CodeReference {
 }
 
 message Action {
-  // Insert before the semantic of instruction or after
-  enum TimeType {
-    Post = 0;
-    Pre = 1;
-  }
-
   // Available actions that mcsema-lift supports
   enum ActionType {
     SaveReg = 0;
@@ -91,12 +85,11 @@ message Action {
     RestoreMemory = 3;
   }
 
-  required TimeType   time_type = 1;
-  required ActionType action_type = 2;
+  required ActionType action_type = 1;
 
   // SRC, DEST
   // Names of operands, in case name is not known in the scope behviour is undefined
-  repeated string     operands = 3;
+  repeated string     operands = 2;
 }
 
 // An instruction inside of a block.
@@ -108,7 +101,12 @@ message Instruction {
 
   // Address of the landing pad
   optional  uint64          lp_ea = 5;
-  optional  Action          actions = 6;
+
+  // Actions to perform before lifting of instruction
+  repeated  Action          pre_actions = 6;
+
+  // Actions to perform after lifting of instruction
+  repeated  Action          post_actions = 7;
 }
 
 // A basic block of instructions inside of a function.
