@@ -522,6 +522,10 @@ NativeModule *ReadProtoBuf(const std::string &file_name,
     func->name = cfg_func.has_name() ? cfg_func.name() : func->lifted_name;
     func->blocks.reserve(static_cast<size_t>(cfg_func.blocks_size()));
     func->is_exported = cfg_func.is_entrypoint();
+    func->prologue_saved_regs =
+      std::vector<std::string>(
+          cfg_func.prologue_saved_regs().begin(),
+          cfg_func.prologue_saved_regs().end());
 
     auto func_it = module->ea_to_func.find(func->ea);
     if (func_it != module->ea_to_func.end()) {
@@ -989,6 +993,22 @@ NativeModule *ReadProtoBuf(const std::string &file_name,
               inst->stack_var = var;
             }
           }
+        }
+
+        for (const auto &cfg_action : cfg_inst.pre_actions()) {
+          std::vector<std::string> operands
+            (cfg_action.operands().begin(), cfg_action.operands().end());
+          inst->pre_actions.push_back(
+              {static_cast<NativeAction::ActionType>(cfg_action.action_type()),
+              std::move(operands)});
+        }
+
+        for (const auto &cfg_action : cfg_inst.post_actions()) {
+          std::vector<std::string> operands
+            (cfg_action.operands().begin(), cfg_action.operands().end());
+          inst->post_actions.push_back(
+              {static_cast<NativeAction::ActionType>(cfg_action.action_type()),
+              std::move(operands)});
         }
 
         block->instructions.push_back(inst);

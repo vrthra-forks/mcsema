@@ -44,6 +44,20 @@ struct NativeExternalFunction;
 struct NativeSegment;
 struct NativeXref;
 
+struct NativeAction {
+  enum class ActionType {
+    SaveReg = 0,
+    RestoreReg = 1,
+    SaveMemory = 2,
+    RestoreMemory = 3
+  };
+
+  ActionType action;
+
+  // Order matters
+  std::vector<std::string> operands;
+};
+
 struct NativeInstruction {
   uint64_t ea = 0;
   uint64_t lp_ea = 0;
@@ -58,6 +72,10 @@ struct NativeInstruction {
   const NativeStackVariable *stack_var = nullptr;
 
   bool does_not_return;
+
+  // Ordering matters
+  std::vector<NativeAction> pre_actions;
+  std::vector<NativeAction> post_actions;
 };
 
 struct NativeBlock {
@@ -98,6 +116,10 @@ struct NativeFunction : public NativeObject {
   mutable llvm::Function *function = nullptr;
   mutable llvm::Value *stack_ptr_var = nullptr;
   mutable llvm::Value *frame_ptr_var = nullptr;
+
+  // It will be only a few items, vector will most likely
+  // be faster than variants of set
+  std::vector<std::string> prologue_saved_regs;
 };
 
 struct NativeStackVariable : public NativeObject {
