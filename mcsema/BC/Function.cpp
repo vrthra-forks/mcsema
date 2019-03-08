@@ -766,6 +766,20 @@ static llvm::Value *FindVarSomewhereInFunction(
   return FindVarSomewhereInFunction(block->getParent(), name);
 }
 
+// Dest must already exists
+static void RestoreImpl(TranslationContext &ctx,
+                          llvm::BasicBlock *block,
+                          const NativeAction &act) {
+  auto src = act.operands[0];
+  auto dest = act.operands[1];
+
+  auto src_ptr = FindVarSomewhereInFunction(block, src);
+  auto dest_ptr = FindVarSomewhereInFunction(block, dest);
+  llvm::IRBuilder<> ir(block);
+  ir.CreateStore(ir.CreateLoad(src_ptr), dest_ptr);
+}
+
+
 // We assume for now, that dest does not exist
 static void SaveReg(TranslationContext &ctx,
                     llvm::BasicBlock *block,
@@ -787,21 +801,35 @@ static void SaveReg(TranslationContext &ctx,
 static void RestoreReg(TranslationContext &ctx,
                     llvm::BasicBlock *block,
                     const NativeAction &act) {
-  auto src = act.operands[0];
-  auto dest = act.operands[1];
-
-  auto src_ptr = FindVarSomewhereInFunction(block, src);
-  auto dest_ptr = FindVarSomewhereInFunction(block, dest);
-
-  llvm::IRBuilder<> ir(block);
-  ir.CreateStore(ir.CreateLoad(src_ptr), dest_ptr);
+  RestoreImpl(ctx, block, act);
 }
 
+// We assume for now, that dest does not exist
+// We only allow saving the current memory pointer
+static void SaveMemory(TranslationContext &ctx,
+                       llvm::BasicBlock *block,
+                       const NativeAction &act) {
+  LOG_IF(FATAL, act.operands[0] != "MEMORY")
+      << "First operand of SaveMemory must be MEMORY";
+  auto dest = act.operands[1];
+  auto src_ptr = remill::LoadMemoryPointer(block);
 
+  llvm::IRBuilder<> ir(block);
+  auto dest_ptr = ir.CreateAlloca(src_ptr->getType(), nullptr, dest);
+  ir.CreateStore(src_ptr, dest_ptr);
+}
+
+// Dest must be MEMORY
+// In case dest is MEMORY then it replaces the current memory pointer
+static void RestoreMemory(TranslationContext &ctx,
+                          llvm::BasicBlock *block,
+                          const NativeAction &act) {
+  RestoreImpl(ctx, block, act);
+}
 static void ExecuteAction(TranslationContext &ctx,
                           llvm::BasicBlock *block,
                           const NativeAction &act) {
-  // TODO: Rework this
+  // TODO: Remake this better if more actions are added
   using AT = NativeAction::ActionType;
   switch(act.action) {
     case AT::SaveReg:
@@ -810,6 +838,10 @@ static void ExecuteAction(TranslationContext &ctx,
     case AT::RestoreReg:
       RestoreReg(ctx, block, act);
       return;
+    case AT::SaveMemory:
+      SaveMemory(ctx, block, act);
+    case AT::RestoreMemory:
+      RestoreMemory(ctx, block, act);
     default:
       LOG(FATAL) << "Unknown action type" << std::endl;
   }
