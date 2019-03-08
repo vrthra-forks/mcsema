@@ -797,12 +797,12 @@ static void RestoreReg(llvm::BasicBlock *block,
 }
 
 // We assume for now, that dest does not exist
+// MEMORY stands for current memory pointer
 static void SaveMemory(llvm::BasicBlock *block,
                        const NativeAction &act) {
   SaveImpl(block, act);
 }
 
-// Dest must be MEMORY
 // In case dest is MEMORY then it replaces the current memory pointer
 static void RestoreMemory(llvm::BasicBlock *block,
                           const NativeAction &act) {
