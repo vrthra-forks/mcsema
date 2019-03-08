@@ -738,6 +738,84 @@ static bool TryLiftTerminator(TranslationContext &ctx,
   return false;
 }
 
+static llvm::Type *GetUnderlying(llvm::Type *type) {
+  if (auto ptr_type = llvm::dyn_cast<llvm::PointerType>(type)) {
+    return ptr_type->getElementType();
+  }
+  return type;
+}
+
+static llvm::Type *GetUnderlying(llvm::Value *val) {
+  return GetUnderlying(val->getType());
+}
+
+static llvm::Value *FindVarSomewhereInFunction(
+    llvm::Function *function, const std::string &name) {
+  for (auto &inst : *function) {
+    if (inst.getName() == name) {
+      return &inst;
+    }
+  }
+
+  LOG(FATAL) << "Could not find variable named: " << name << " in "
+             << function->getName().str();
+}
+
+static llvm::Value *FindVarSomewhereInFunction(
+    llvm::BasicBlock *block, const std::string &name) {
+  return FindVarSomewhereInFunction(block->getParent(), name);
+}
+
+// We assume for now, that dest does not exist
+static void SaveReg(TranslationContext &ctx,
+                    llvm::BasicBlock *block,
+                    const NativeAction &act) {
+  auto src = act.operands[0];
+  auto dest = act.operands[1];
+
+  auto src_ptr = FindVarSomewhereInFunction(block, src);
+
+  llvm::IRBuilder<> ir(block);
+
+  // It is important to provide name, as we will most likely later load from it,
+  // therefore we need to be able to find it
+  auto dest_ptr = ir.CreateAlloca(GetUnderlying(src_ptr), nullptr, dest);
+  ir.CreateStore(ir.CreateLoad(src_ptr), dest_ptr);
+}
+
+// Dest must already exists
+static void RestoreReg(TranslationContext &ctx,
+                    llvm::BasicBlock *block,
+                    const NativeAction &act) {
+  auto src = act.operands[0];
+  auto dest = act.operands[1];
+
+  auto src_ptr = FindVarSomewhereInFunction(block, src);
+  auto dest_ptr = FindVarSomewhereInFunction(block, dest);
+
+  llvm::IRBuilder<> ir(block);
+  ir.CreateStore(ir.CreateLoad(src_ptr), dest_ptr);
+}
+
+
+static void ExecuteAction(TranslationContext &ctx,
+                          llvm::BasicBlock *block,
+                          const NativeAction &act) {
+  // TODO: Rework this
+  using AT = NativeAction::ActionType;
+  switch(act.action) {
+    case AT::SaveReg:
+      SaveReg(ctx, block, act);
+      return;
+    case AT::RestoreReg:
+      RestoreReg(ctx, block, act);
+      return;
+    default:
+      LOG(FATAL) << "Unknown action type" << std::endl;
+  }
+}
+
+
 // Lift a decoded instruction into `block`.
 static bool LiftInstIntoBlock(TranslationContext &ctx,
                               llvm::BasicBlock *block,
@@ -774,7 +852,15 @@ static bool LiftInstIntoBlock(TranslationContext &ctx,
     InlineSubFuncCall(block, GetBreakPoint(inst_addr));
   }
 
+  for (const auto &act : ctx.cfg_inst->pre_actions) {
+    ExecuteAction(ctx, block, act);
+  }
+
   ctx.lifter->LiftIntoBlock(inst, block);
+
+  for (const auto &act : ctx.cfg_inst->post_actions) {
+    ExecuteAction(ctx, block, act);
+  }
 
   auto ret = true;
   if (TryLiftTerminator(ctx, block, inst)) {
