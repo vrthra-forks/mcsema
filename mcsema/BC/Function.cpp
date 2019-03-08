@@ -756,9 +756,8 @@ static llvm::Value *FindVarSomewhereInFunction(
 }
 
 // Dest must already exists
-static void RestoreImpl(TranslationContext &ctx,
-                          llvm::BasicBlock *block,
-                          const NativeAction &act) {
+static void RestoreImpl(llvm::BasicBlock *block,
+                        const NativeAction &act) {
   auto src = act.operands[0];
   auto dest = act.operands[1];
 
@@ -769,8 +768,7 @@ static void RestoreImpl(TranslationContext &ctx,
 }
 
 // We assume for now, that dest does not exist
-static void SaveImpl(TranslationContext &ctx,
-                     llvm::BasicBlock *block,
+static void SaveImpl(llvm::BasicBlock *block,
                      const NativeAction &act) {
   auto src = act.operands[0];
   auto dest = act.operands[1];
@@ -787,50 +785,45 @@ static void SaveImpl(TranslationContext &ctx,
 }
 
 // We assume for now, that dest does not exist
-static void SaveReg(TranslationContext &ctx,
-                    llvm::BasicBlock *block,
+static void SaveReg(llvm::BasicBlock *block,
                     const NativeAction &act) {
-  SaveImpl(ctx, block, act);
+  SaveImpl(block, act);
 }
 
 // Dest must already exists
-static void RestoreReg(TranslationContext &ctx,
-                    llvm::BasicBlock *block,
-                    const NativeAction &act) {
-  RestoreImpl(ctx, block, act);
+static void RestoreReg(llvm::BasicBlock *block,
+                       const NativeAction &act) {
+  RestoreImpl(block, act);
 }
 
 // We assume for now, that dest does not exist
-static void SaveMemory(TranslationContext &ctx,
-                       llvm::BasicBlock *block,
+static void SaveMemory(llvm::BasicBlock *block,
                        const NativeAction &act) {
-  SaveImpl(ctx, block, act);
+  SaveImpl(block, act);
 }
 
 // Dest must be MEMORY
 // In case dest is MEMORY then it replaces the current memory pointer
-static void RestoreMemory(TranslationContext &ctx,
-                          llvm::BasicBlock *block,
+static void RestoreMemory(llvm::BasicBlock *block,
                           const NativeAction &act) {
-  RestoreImpl(ctx, block, act);
+  RestoreImpl(block, act);
 }
-static void ExecuteAction(TranslationContext &ctx,
-                          llvm::BasicBlock *block,
+static void ExecuteAction(llvm::BasicBlock *block,
                           const NativeAction &act) {
   // TODO: Remake this better if more actions are added, possibly store
   // function pointer in the action itself, then just call it
   using AT = NativeAction::ActionType;
   switch(act.action) {
     case AT::SaveReg:
-      SaveReg(ctx, block, act);
+      SaveReg(block, act);
       return;
     case AT::RestoreReg:
-      RestoreReg(ctx, block, act);
+      RestoreReg(block, act);
       return;
     case AT::SaveMemory:
-      SaveMemory(ctx, block, act);
+      SaveMemory(block, act);
     case AT::RestoreMemory:
-      RestoreMemory(ctx, block, act);
+      RestoreMemory(block, act);
     default:
       LOG(FATAL) << "Unknown action type" << std::endl;
   }
@@ -874,13 +867,13 @@ static bool LiftInstIntoBlock(TranslationContext &ctx,
   }
 
   for (const auto &act : ctx.cfg_inst->pre_actions) {
-    ExecuteAction(ctx, block, act);
+    ExecuteAction(block, act);
   }
 
   ctx.lifter->LiftIntoBlock(inst, block);
 
   for (const auto &act : ctx.cfg_inst->post_actions) {
-    ExecuteAction(ctx, block, act);
+    ExecuteAction(block, act);
   }
 
   auto ret = true;
