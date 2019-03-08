@@ -738,17 +738,6 @@ static bool TryLiftTerminator(TranslationContext &ctx,
   return false;
 }
 
-static llvm::Type *GetUnderlying(llvm::Type *type) {
-  if (auto ptr_type = llvm::dyn_cast<llvm::PointerType>(type)) {
-    return ptr_type->getElementType();
-  }
-  return type;
-}
-
-static llvm::Type *GetUnderlying(llvm::Value *val) {
-  return GetUnderlying(val->getType());
-}
-
 static llvm::Value *FindVarSomewhereInFunction(
     llvm::Function *function, const std::string &name) {
   for (auto &inst : *function) {
@@ -779,11 +768,10 @@ static void RestoreImpl(TranslationContext &ctx,
   ir.CreateStore(ir.CreateLoad(src_ptr), dest_ptr);
 }
 
-
 // We assume for now, that dest does not exist
-static void SaveReg(TranslationContext &ctx,
-                    llvm::BasicBlock *block,
-                    const NativeAction &act) {
+static void SaveImpl(TranslationContext &ctx,
+                     llvm::BasicBlock *block,
+                     const NativeAction &act) {
   auto src = act.operands[0];
   auto dest = act.operands[1];
 
@@ -793,8 +781,16 @@ static void SaveReg(TranslationContext &ctx,
 
   // It is important to provide name, as we will most likely later load from it,
   // therefore we need to be able to find it
-  auto dest_ptr = ir.CreateAlloca(GetUnderlying(src_ptr), nullptr, dest);
-  ir.CreateStore(ir.CreateLoad(src_ptr), dest_ptr);
+  auto src_v = ir.CreateLoad(src_ptr);
+  auto dest_ptr = ir.CreateAlloca(src_v->getType(), nullptr, dest);
+  ir.CreateStore(src_v, dest_ptr);
+}
+
+// We assume for now, that dest does not exist
+static void SaveReg(TranslationContext &ctx,
+                    llvm::BasicBlock *block,
+                    const NativeAction &act) {
+  SaveImpl(ctx, block, act);
 }
 
 // Dest must already exists
@@ -805,18 +801,10 @@ static void RestoreReg(TranslationContext &ctx,
 }
 
 // We assume for now, that dest does not exist
-// We only allow saving the current memory pointer
 static void SaveMemory(TranslationContext &ctx,
                        llvm::BasicBlock *block,
                        const NativeAction &act) {
-  LOG_IF(FATAL, act.operands[0] != "MEMORY")
-      << "First operand of SaveMemory must be MEMORY";
-  auto dest = act.operands[1];
-  auto src_ptr = remill::LoadMemoryPointer(block);
-
-  llvm::IRBuilder<> ir(block);
-  auto dest_ptr = ir.CreateAlloca(src_ptr->getType(), nullptr, dest);
-  ir.CreateStore(src_ptr, dest_ptr);
+  SaveImpl(ctx, block, act);
 }
 
 // Dest must be MEMORY
@@ -829,7 +817,8 @@ static void RestoreMemory(TranslationContext &ctx,
 static void ExecuteAction(TranslationContext &ctx,
                           llvm::BasicBlock *block,
                           const NativeAction &act) {
-  // TODO: Remake this better if more actions are added
+  // TODO: Remake this better if more actions are added, possibly store
+  // function pointer in the action itself, then just call it
   using AT = NativeAction::ActionType;
   switch(act.action) {
     case AT::SaveReg:
