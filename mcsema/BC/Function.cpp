@@ -738,31 +738,14 @@ static bool TryLiftTerminator(TranslationContext &ctx,
   return false;
 }
 
-static llvm::Value *FindVarSomewhereInFunction(
-    llvm::Function *function, const std::string &name) {
-  for (auto &inst : *function) {
-    if (inst.getName() == name) {
-      return &inst;
-    }
-  }
-
-  LOG(FATAL) << "Could not find variable named: " << name << " in "
-             << function->getName().str();
-}
-
-static llvm::Value *FindVarSomewhereInFunction(
-    llvm::BasicBlock *block, const std::string &name) {
-  return FindVarSomewhereInFunction(block->getParent(), name);
-}
-
 // Dest must already exists
 static void RestoreImpl(llvm::BasicBlock *block,
                         const NativeAction &act) {
   auto src = act.operands[0];
   auto dest = act.operands[1];
 
-  auto src_ptr = FindVarSomewhereInFunction(block, src);
-  auto dest_ptr = FindVarSomewhereInFunction(block, dest);
+  auto src_ptr = remill::FindVarInFunction(block, src);
+  auto dest_ptr = remill::FindVarInFunction(block, dest);
   llvm::IRBuilder<> ir(block);
   ir.CreateStore(ir.CreateLoad(src_ptr), dest_ptr);
 }
@@ -773,14 +756,20 @@ static void SaveImpl(llvm::BasicBlock *block,
   auto src = act.operands[0];
   auto dest = act.operands[1];
 
-  auto src_ptr = FindVarSomewhereInFunction(block, src);
+  auto src_ptr = remill::FindVarInFunction(block, src);
 
   llvm::IRBuilder<> ir(block);
+  auto src_v = ir.CreateLoad(src_ptr);
+
+  // Want to create alloca in the entry block, ideally together with the rest
+  // of __remill_basic_block so it is inserted at the beginning of the function
+  auto &entry_block = block->getParent()->getEntryBlock();
+  llvm::IRBuilder<> basic_block_ir(&entry_block, entry_block.begin());
 
   // It is important to provide name, as we will most likely later load from it,
   // therefore we need to be able to find it
-  auto src_v = ir.CreateLoad(src_ptr);
-  auto dest_ptr = ir.CreateAlloca(src_v->getType(), nullptr, dest);
+  auto dest_ptr = basic_block_ir.CreateAlloca(src_v->getType(), nullptr, dest);
+
   ir.CreateStore(src_v, dest_ptr);
 }
 
