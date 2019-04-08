@@ -60,6 +60,7 @@ Why would anyone translate binaries *back* to bitcode?
 |  Lifts stack variables? | Yes | No | Maybe | Yes | No | No | No | Yes | No | No | Maybe |
 |  Lifts global variables? | Yes | Maybe | Yes | Yes | No | Maybe | No | No | No | Yes | Maybe |
 |  Has a test suite? | Yes | No | Yes | Yes | Yes | Yes | Yes | Yes | No | Yes | No |
+|  Usabele for grammar recovery? | Yes | Trouble with recompiling | No makefiles after cmake | No X86_64 | Requires GHC and no longer builds | ? | No | No | No | No | No |
 
 **Note:** We label some architectures as "S2E" to mean any architecture supported by the S2E system. A system using "McSema" for control-flow recovery (e.g. RevGen) uses McSema's CFG.proto format for recovering control-flow. In the case of RevGen, only bitcode produced from DARPA Cyber Grand Challenge (CGC) binaries is executable.
 
